@@ -1,0 +1,13 @@
+body {
+    font-family: sans-serif;
+    margin: 20px;
+}
+
+.img-grid {
+    display: flex;
+    gap: 20px;
+}
+
+.img-grid div {
+    text-align: center;
+}
