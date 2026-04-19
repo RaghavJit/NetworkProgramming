@@ -2,4 +2,4 @@
 *.exe
 *.out
 *.log
- 
+testfolder/http_server* 

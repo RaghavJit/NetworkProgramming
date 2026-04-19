@@ -18,6 +18,9 @@
 #include <arpa/inet.h>
 #include <unordered_map>
 
+#include "defRoutes.h"
+#include "router.h"
+
 #define BACKLOG 10
 #define BUFFERSIZE 30000 
 
@@ -25,6 +28,7 @@ using namespace std;
 
 string getMethod(char buffer[BUFFERSIZE]);
 string getPath(char buffer[BUFFERSIZE]);
+string getClientBody(char buffer[BUFFERSIZE]);
 string getFileExt(string path);
 int getFileDesc(string path);
 bool sendResponse(int conn_fd, string& path, string& response);
@@ -120,6 +124,12 @@ int main (int argc, char* argv[]) {
 
     std::cout << "Listening on address: " << argv[1] << ":" <<argv[2] <<endl;
 
+    Router GET = usrts::constructRoutes("GET");
+    Router POST = usrts::constructRoutes("POST");
+    Router PATCH = usrts::constructRoutes("PATCH");
+    Router PUT = usrts::constructRoutes("PUT");
+    Router DELETE = usrts::constructRoutes("DELETE");
+
     while (true) {
         socklen_t addr_len = sizeof(conn_addr);
         int conn_sock_fd = accept(sock_fd, (struct sockaddr*)&conn_addr, &addr_len);
@@ -143,6 +153,7 @@ int main (int argc, char* argv[]) {
             string client_method = getMethod(buffer);
             string client_req_path = "." + getPath(buffer);
             string client_file_ext = getFileExt(client_req_path);
+            string client_body = getClientBody(buffer);
 
             if (client_method == "GET") {
                 string response_string = headerString;
@@ -175,16 +186,26 @@ int main (int argc, char* argv[]) {
                 }
             }
             else if (client_method == "POST") {
-                std::cout << "POST";
+                string message = POST.callRoute(client_req_path.substr(1), client_body);
+                string response_string = headerString;
+                response_string = response_string + " 200\r\nContent-Length: " + to_string(message.size()) + "\r\nConnection: close\r\n\r\n"; 
+                response_string = response_string + message;
+                std::cout << "method is: "<< client_method <<endl;
+                std::cout << "path is: "<< client_req_path.substr(1) <<endl;
+                std::cout << "message is: "<< message <<endl;
+                std::cout << "response is: "<< response_string <<endl;
+                write(conn_sock_fd, response_string.c_str(), response_string.size());
+                close(conn_sock_fd);
+                exit(0);
             }
             else if (client_method == "DELETE") {
-                std::cout << "POST";
+                string message = DELETE.callRoute(client_req_path, client_body);
             }
-            else if (client_method == "UPDATE") {
-                std::cout << "POST";
+            else if (client_method == "PATCH") {
+                string message = PATCH.callRoute(client_req_path, client_body);
             }
             else if (client_method == "PUT") {
-                std::cout << "POST";
+                string message = PUT.callRoute(client_req_path, client_body);
             }
         }
         
@@ -269,4 +290,16 @@ bool sendResponse(int conn_fd, string& path, string& response) {
 
     close(file_fd);
     return true;
+}
+string getClientBody(char buffer[BUFFERSIZE]) {
+    string request(buffer);
+
+    string breaker = "\r\n\r\n";
+    size_t pos = request.find(breaker);
+
+    if (pos == string::npos) {
+        return ""; // no body found
+    }
+
+    return request.substr(pos + breaker.length());
 }
