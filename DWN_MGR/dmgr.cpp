@@ -149,6 +149,7 @@ void sendQuery(int sock_fd, string request, size_t& content_len, string& content
 }
 
 int downloadFileSec(int sock_fd, int file_fd, size_t per_worker_load, ssize_t w_offset, string request) {
+    cout<<w_offset<<endl;
     SSL_CTX* ctx = create_client_ssl_context();
     SSL* ssl = SSL_new(ctx);
     SSL_set_fd(ssl, sock_fd); 
@@ -185,7 +186,6 @@ int downloadFileSec(int sock_fd, int file_fd, size_t per_worker_load, ssize_t w_
             header+=temp;
             if (size_t pos = header.find("\r\n\r\n"); pos != string::npos) {
                 body_start = header.substr(pos + 4);
-                cout<<"body"<<body_start<<endl;
                 break;
             }
 
@@ -195,7 +195,7 @@ int downloadFileSec(int sock_fd, int file_fd, size_t per_worker_load, ssize_t w_
         pwrite(file_fd, body_start.data(), body_start.size(), w_offset);
         w_offset+=body_start.size();
 
-        size_t remaining = per_worker_load;
+        size_t remaining = per_worker_load - body_start.size();
         while(remaining > 0) {
             if (SSL_read_ex(ssl, buffer, BUFFER_SIZE, &bytes_read) <= 0) {
                 ERR_print_errors_fp(stderr);
@@ -243,6 +243,7 @@ string getRange(int WORKER_INDEX, int workers, size_t content_length, size_t& w_
     int start, end;
     
     start = per_worker_load*WORKER_INDEX;
+    w_offset = start;
     if (WORKER_INDEX+1==workers) {
         end = content_length-1;
         per_worker_load = end-start;
