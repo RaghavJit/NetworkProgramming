@@ -19,7 +19,6 @@
 #include <fcntl.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
-#include <vector>
 
 using namespace std;
 
@@ -149,71 +148,67 @@ void sendQuery(int sock_fd, string request, size_t& content_len, string& content
     return;
 }
 
-int downloadFileSec(int sock_fd, int file_fd, size_t per_worker_load, off_t w_offset, const std::string& request){
+int downloadFileSec(int sock_fd, int file_fd, size_t per_worker_load, ssize_t w_offset, string request) {
     SSL_CTX* ctx = create_client_ssl_context();
     SSL* ssl = SSL_new(ctx);
-    SSL_set_fd(ssl, sock_fd);
+    SSL_set_fd(ssl, sock_fd); 
 
     if (SSL_connect(ssl) <= 0) {
+        ERR_print_errors_fp(stderr);
         SSL_free(ssl);
         SSL_CTX_free(ctx);
+        close(file_fd);
         return -1;
-    }
-
+    } 
     if (SSL_write(ssl, request.c_str(), request.size()) <= 0) {
+        ERR_print_errors_fp(stderr);
         SSL_free(ssl);
         SSL_CTX_free(ctx);
+        close(file_fd);
         return -1;
     }
+    else {
+        
+        // header read loop
+        size_t bytes_read;
+        string header, body_start;
+        char buffer[BUFFER_SIZE];
+        while(true) {
+            if (SSL_read_ex(ssl, buffer, BUFFER_SIZE, &bytes_read) <= 0) {
+                ERR_print_errors_fp(stderr);
+                SSL_free(ssl);
+                SSL_CTX_free(ctx);
+                close(file_fd);
+                return -1;
+            }
+            string temp(buffer, bytes_read);
+            header+=temp;
+            if (size_t pos = header.find("\r\n\r\n"); pos != string::npos) {
+                body_start = header.substr(pos + 4);
+                cout<<"body"<<body_start<<endl;
+                break;
+            }
 
-    const size_t BUF = 16384;
-    char buf[BUF];
+        }
+        
+        // body read loop
+        pwrite(file_fd, body_start.data(), body_start.size(), w_offset);
+        w_offset+=body_start.size();
 
-    std::string header_accum;
-    std::string body_start;
-
-    size_t n = 0;
-
-    // ----------- READ & PARSE HEADER -----------
-    while (true) {
-        if (!SSL_read_ex(ssl, buf, BUF, &n)) {
-            SSL_free(ssl);
-            SSL_CTX_free(ctx);
-            return -1;
+        size_t remaining = per_worker_load;
+        while(remaining > 0) {
+            if (SSL_read_ex(ssl, buffer, BUFFER_SIZE, &bytes_read) <= 0) {
+                ERR_print_errors_fp(stderr);
+                SSL_free(ssl);
+                SSL_CTX_free(ctx);
+                return -1;
+            }
+            pwrite(file_fd, buffer, bytes_read, w_offset);
+            w_offset+=bytes_read;
+            remaining-=bytes_read;
         }
 
-        header_accum.append(buf, n);
-
-        size_t pos = header_accum.find("\r\n\r\n");
-        if (pos != std::string::npos) {
-            pos += 4;
-            body_start = header_accum.substr(pos);
-            break;
-        }
     }
-
-    // ----------- WRITE FIRST BODY BYTES (IF ANY) -----------
-    size_t bytes_written = 0;
-
-    if (!body_start.empty()) {
-        size_t take = std::min(body_start.size(), per_worker_load);
-        pwrite(file_fd, body_start.data(), take, w_offset);
-        w_offset += take;
-        bytes_written += take;
-    }
-
-    // ----------- CONTINUE READING BODY UNTIL CHUNK COMPLETE -----------
-    while (bytes_written < per_worker_load) {
-        if (!SSL_read_ex(ssl, buf, BUF, &n))
-            break;
-
-        size_t take = std::min(n, per_worker_load - bytes_written);
-
-        pwrite(file_fd, buf, take, w_offset);
-        w_offset += take;
-        bytes_written += take;
-    }
-
     SSL_free(ssl);
     SSL_CTX_free(ctx);
     return 0;
@@ -260,7 +255,7 @@ string getRange(int WORKER_INDEX, int workers, size_t content_length, size_t& w_
 }
 
 int getFileDesc(string path) {
-    int file_fd = open(path.c_str(), O_CREAT | O_WRONLY, 0644);
+    int file_fd = open(path.c_str(), O_CREAT | O_TRUNC | O_WRONLY, 0644);
     if (file_fd < 0) {
         cerr << "Error opening file" << path <<endl;
         close(file_fd);
@@ -304,7 +299,6 @@ int createConnectSocket(string host, string port){
             continue;
         }
 
-        cout << "Socket created successfully on address: " << ipstr << endl;
         result = p;
         break;
     }
@@ -343,11 +337,6 @@ int main (int argc, char *argv[]) {
     if (trnc.back()=='/') trnc.pop_back();
     file=trnc.substr(trnc.rfind("/")+1);
 
-    cout<< "host "<< host <<endl;
-    cout<< "port "<< port <<endl;
-    cout<< "path "<< path <<endl;
-    cout<< "file "<< file <<endl;
-
     int sock_fd = createConnectSocket(host, port);
     
     size_t content_length;
@@ -373,8 +362,7 @@ int main (int argc, char *argv[]) {
             
             size_t per_worker_load, w_offset;
             string query = constructQuery("GET", host, path, content_type, getRange(WORKER_INDEX, workers, content_length, w_offset, per_worker_load));
-            cout<<"query"<<query<<endl;
-            int file_fd = getFileDesc("/tmp/"+file+to_string(WORKER_INDEX));
+            int file_fd = getFileDesc("./"+file);
             if (link[4]=='s') {
                 downloadFileSec(sock_fd, file_fd, per_worker_load, w_offset, query);
             }
@@ -382,9 +370,11 @@ int main (int argc, char *argv[]) {
                 downloadFile(sock_fd, file_fd, per_worker_load, w_offset, query);
             }
 
+            close(file_fd);
             exit(0);
         }
     }
+
     close(sock_fd);
     return 0;
 }
